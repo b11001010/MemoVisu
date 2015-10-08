@@ -144,15 +144,8 @@ extc void _export cdecl ODBG_Pluginmainloop(DEBUG_EVENT *debugevent) {
 			Disassemble(eip, threadid, command, comment);
 			//			Addtolist(eip, -1, "Command - %s", command);
 			//			Addtolist(eip, -1, "Comment - %s", comment);
-			hdc = GetDC(hwplugin);
-			TextOut(hdc, 10, 30, command, lstrlen(command));
 
 			checkAsmCode(command, pthread, eip);
-			if (findIndex(eip) == 1){
-				Addtolist(eip, -1, "検知");
-			}
-
-			ReleaseDC(hwplugin, hdc);
 		}
 
 	}
@@ -208,17 +201,65 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	PAINTSTRUCT ps;
 	HDC hdc;
 	LPCTSTR str = TEXT("テキスト");
+	HPEN hPen;
+	HBRUSH hBrush;
 
 	switch (message)
 	{
 	case WM_DESTROY:
 		hwplugin = NULL;
 		break;
-	case WM_PAINT:
-		hdc = BeginPaint(hWnd, &ps);
-		TextOut(hdc, 10, 10, str, _tcslen(str));
-		EndPaint(hWnd, &ps);
-		break;
+	case WM_PAINT: {
+		hdc = BeginPaint(hWnd, &ps);	//描画開始
+
+		/*
+		hPen = CreatePen(PS_SOLID, 1, RGB(0, 0, 0));// 黒い点線のペンを作成
+		hBrush = (HBRUSH)GetStockObject(NULL_BRUSH);// 空のブラシを取得
+		SelectObject(hdc, hPen);		// 作成したペンを使用するように設定
+		SelectObject(hdc, hBrush);		// 取得したブラシを使用するように設定
+		*/
+
+		int by = 0;
+		int margin_x = 0;
+		int margin_y = 0;
+
+		for (DWORD d : v) {
+			d = d - 4000000;
+			int x = d % 1000;
+			int y = d / 1000;
+
+			char text[64];
+			sprintf(text, "x=%d y=%d", x, y);
+			TextOut(hdc, 10, 10, text, lstrlen(text));
+
+			SetPixel(hdc, x, y, RGB(0, 0, 0));
+		}
+
+		/*
+		for (DWORD d : v) {
+			d = d - 4000000;
+			int x = d % 1000;
+			int y = d / 1000;
+
+			char text[64];
+			sprintf(text, "x=%d y=%d", x, y);
+			TextOut(hdc, 10, 10, text, lstrlen(text));
+
+			if (by == y) {
+				margin_x = margin_x + 10;
+			}
+			else {
+				margin_x = 0;
+				margin_y = margin_y + 10;
+			}
+			Rectangle(hdc, x + margin_x, y + margin_y, x + margin_x + 10, y + margin_y + 10);
+			by = y;
+		}
+		*/
+
+		//DeleteObject(hPen);				// 作成したペンを削除
+		EndPaint(hWnd, &ps);			//描画終了
+		break; }
 	default:
 		return DefWindowProc(hWnd, message, wParam, lParam);
 	}
@@ -263,8 +304,8 @@ DWORD checkAsmCode(char* asmCode, t_thread* pthread, DWORD eip){
 		sprintf(info, "%s", buf.c_str());
 
 		//ログウィンドウにメモリ書込み命令を出力
-		//Addtolist(eip, -1, asmCode);
-		//Addtolist(eip, -1, info);
+		Addtolist(eip, -1, asmCode);
+		Addtolist(eip, -1, info);
 
 	}
 
