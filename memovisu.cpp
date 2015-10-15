@@ -23,6 +23,7 @@ HWND		hwmain;			// Handle of main OllyDbg window
 HWND		hwplugin;		// Plugin window
 
 std::vector<DWORD> v;
+std::vector<BYTE> binary;
 
 BOOL WINAPI DllEntryPoint(HINSTANCE hi, DWORD reason, LPVOID reserved) {
 	if (reason == DLL_PROCESS_ATTACH)
@@ -59,6 +60,14 @@ extc int _export cdecl ODBG_Plugininit(
 	{
 		return FALSE;
 	}
+
+	/*
+	for (int i = 0x410000; i < 0x410500; ++i) {
+		BYTE b = 0;
+		Readmemory(&b, i, sizeof(b), MM_SILENT);
+		binary.push_back(b);
+	}
+	*/
 
 	return 0;
 };
@@ -122,8 +131,6 @@ extc void _export cdecl ODBG_Pluginmainloop(DEBUG_EVENT *debugevent) {
 	ulong threadid = Getcputhreadid();
 	char command[256];
 	char comment[256];
-
-	HDC hdc;
 
 	//デバッグイベントが発生していたら
 	if (debugevent) {
@@ -200,7 +207,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
 	PAINTSTRUCT ps;
 	HDC hdc;
-	LPCTSTR str = TEXT("テキスト");
 	HPEN hPen;
 	HBRUSH hBrush;
 
@@ -213,51 +219,66 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		hdc = BeginPaint(hWnd, &ps);	//描画開始
 
 		/*
+		for (int i = 0; i != binary.size(); ++i) {
+			BYTE b;
+			ulong addr = 0x410000 + i;
+			Readmemory(&b, addr, sizeof(b), MM_SILENT);
+			if (binary[i] != b) {
+				hPen = CreatePen(PS_SOLID, 1, RGB(0, b, 0));
+				hBrush = (HBRUSH)GetStockObject(NULL_BRUSH);
+				SelectObject(hdc, hPen);
+				SelectObject(hdc, hBrush);
+
+				int margin_x = 0;
+				int margin_y = 0;
+				int height = 5;
+				int width = 5;
+				int d = addr - 0x400000;
+				int x = d % 0x100;
+				int y = d / 0x100;
+				char text[64];
+				sprintf(text, "x=%02x y=%03x byte=%02x", x, y, b);
+				TextOut(hdc, 10, 10, text, lstrlen(text));
+
+				x = x*margin_x + (x - 1)*width;
+				y = y*margin_y + (y - 1)*height;
+
+				Rectangle(hdc, x, y, x + width, y + height);
+			}
+		}
+		*/
+
+		/*
+
 		hPen = CreatePen(PS_SOLID, 1, RGB(0, 0, 0));// 黒い点線のペンを作成
 		hBrush = (HBRUSH)GetStockObject(NULL_BRUSH);// 空のブラシを取得
 		SelectObject(hdc, hPen);		// 作成したペンを使用するように設定
 		SelectObject(hdc, hBrush);		// 取得したブラシを使用するように設定
-		*/
-
-		int by = 0;
+		
 		int margin_x = 0;
 		int margin_y = 0;
-
+		int height = 5;
+		int width = 5;
+		
 		for (DWORD d : v) {
-			d = d - 4000000;
-			int x = d % 1000;
-			int y = d / 1000;
+			d = d - 0x400000;
+			int x = d % 0x100;
+			int y = d / 0x100;
 
 			char text[64];
-			sprintf(text, "x=%d y=%d", x, y);
+			sprintf(text, "x=%02x y=%04x", x, y);
 			TextOut(hdc, 10, 10, text, lstrlen(text));
 
-			SetPixel(hdc, x, y, RGB(0, 0, 0));
+			x = x*margin_x + (x - 1)*width;
+			y = y*margin_y + (y - 1)*height;
+
+			Rectangle(hdc, x, y, x + width, y + height);
+			//SetPixel(hdc, x, y, RGB(0, 0, 0));
 		}
-
-		/*
-		for (DWORD d : v) {
-			d = d - 4000000;
-			int x = d % 1000;
-			int y = d / 1000;
-
-			char text[64];
-			sprintf(text, "x=%d y=%d", x, y);
-			TextOut(hdc, 10, 10, text, lstrlen(text));
-
-			if (by == y) {
-				margin_x = margin_x + 10;
-			}
-			else {
-				margin_x = 0;
-				margin_y = margin_y + 10;
-			}
-			Rectangle(hdc, x + margin_x, y + margin_y, x + margin_x + 10, y + margin_y + 10);
-			by = y;
-		}
-		*/
 
 		//DeleteObject(hPen);				// 作成したペンを削除
+		*/
+
 		EndPaint(hWnd, &ps);			//描画終了
 		break; }
 	default:
@@ -292,7 +313,7 @@ DWORD checkAsmCode(char* asmCode, t_thread* pthread, DWORD eip){
 		if (reg == "EDI"){
 			//ストリームへ変換
 			std::ostringstream ostr;
-			ostr << pthread->reg.r[7];
+			ostr << std::hex << pthread->reg.r[7];
 			//ストリームから文字列へ
 			addr = ostr.str();
 
@@ -307,6 +328,42 @@ DWORD checkAsmCode(char* asmCode, t_thread* pthread, DWORD eip){
 		Addtolist(eip, -1, asmCode);
 		Addtolist(eip, -1, info);
 
+		//------------------------------
+		PAINTSTRUCT ps;
+		DWORD d = pthread->reg.r[7];
+		BYTE data;
+		ulong length;
+		length = Readmemory(&data, d, sizeof(data), 0);
+
+		HDC hdc = GetDC(hwplugin);
+		HPEN hPen;
+		HBRUSH hBrush;
+		hPen = CreatePen(PS_SOLID, 1, RGB(0, data, 0));
+		hBrush = CreateSolidBrush(RGB(0, data, 0));
+		SelectObject(hdc, hPen);
+		SelectObject(hdc, hBrush);
+		int margin_x = 0;
+		int margin_y = 0;
+		int height = 4;
+		int width = 4;
+
+		d = d - 0x400000;
+		int x = d % 0x100;
+		int y = d / 0x100;
+		
+		char text[64];
+		sprintf(text, "x=%02x y=%03x data=%02x length=%d", x, y, data, length);
+		TextOut(hdc, 10, 10, text, lstrlen(text));
+
+		x = x*margin_x + (x - 1)*width +20;
+		y = y*margin_y + (y - 1)*height;
+
+		Rectangle(hdc, x, y, x + width, y + height);
+
+		ReleaseDC(hwplugin, hdc);
+		DeleteObject(hPen);
+		DeleteObject(hBrush);
+		//------------------------------
 	}
 
 	return NULL;
