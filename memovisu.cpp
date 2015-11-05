@@ -22,8 +22,14 @@ HINSTANCE	hinst;			// DLL instance
 HWND		hwmain;			// Handle of main OllyDbg window
 HWND		hwplugin;		// Plugin window
 
-std::vector<DWORD> v;
+std::vector<DWORD> v_w;
+std::vector<DWORD> v_r;
 std::vector<BYTE> binary;
+
+int margin_x = 0;
+int margin_y = 0;
+int height = 2;
+int width = 2;
 
 BOOL WINAPI DllEntryPoint(HINSTANCE hi, DWORD reason, LPVOID reserved) {
 	if (reason == DLL_PROCESS_ATTACH)
@@ -108,7 +114,7 @@ ulong Disassemble(ulong addr, ulong threadid, char *command, char *comment) {
 	return length;
 }
 
-int findIndex(DWORD value)
+int findIndex(DWORD value, std::vector<DWORD> v)
 {
 	auto iter = std::find(v.begin(), v.end(), value);
 	size_t index = std::distance(v.begin(), iter);
@@ -163,7 +169,7 @@ extc void _export cdecl ODBG_Pluginmainloop(DEBUG_EVENT *debugevent) {
 //
 BOOL InitInstance(HINSTANCE hInstance) {
 
-	hwplugin = CreateWindow(TEXT("TEST"), TEXT("MemoVisu"), WS_OVERLAPPEDWINDOW,
+	hwplugin = CreateWindow(TEXT("TEST"), TEXT("MemoVisu"), WS_OVERLAPPEDWINDOW | WS_VSCROLL,
 		CW_USEDEFAULT, 0, 200, 100, hwmain, NULL, hInstance, NULL);
 
 	if (!hwplugin) {
@@ -207,79 +213,122 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
 	PAINTSTRUCT ps;
 	HDC hdc;
-	HPEN hPen;
-	HBRUSH hBrush;
+
+	static int wx, wy;//画面の大きさ
+	static int y;//スクロール位置
+	static int dy;//増分
+	static int range;//最大スクロール範囲
+	static int yclient;//現在のクライアント領域の高さ
 
 	switch (message)
 	{
+	case WM_CREATE:
+		wx = GetSystemMetrics(SM_CXSCREEN);
+		wy = GetSystemMetrics(SM_CYSCREEN);
+		break;
 	case WM_DESTROY:
 		hwplugin = NULL;
+		break;
+	case WM_SIZE:
+		yclient = HIWORD(lParam);
+		range = wy - yclient;
+		y = min(y, range);
+		SetScrollRange(hWnd, SB_VERT, 0, range, FALSE);
+		SetScrollPos(hWnd, SB_VERT, y, TRUE);
+		break;
+	case WM_VSCROLL:
+		switch (LOWORD(wParam)) {
+		case SB_LINEUP:
+			dy = -1;
+			break;
+		case SB_LINEDOWN:
+			dy = 1;
+			break;
+		case SB_THUMBPOSITION:
+			dy = HIWORD(wParam) - y;
+			break;
+		case SB_PAGEDOWN:
+			dy = 10;
+			break;
+		case SB_PAGEUP:
+			dy = -10;
+			break;
+		default:
+			dy = 0;
+			break;
+		}
+		dy = max(-y, min(dy, range - y));
+		if (dy != 0) {
+			y += dy;
+			ScrollWindow(hWnd, 0, -dy, NULL, NULL);
+			SetScrollPos(hWnd, SB_VERT, y, TRUE);
+			UpdateWindow(hWnd);
+		}
 		break;
 	case WM_PAINT: {
 		hdc = BeginPaint(hWnd, &ps);	//描画開始
 
-		/*
-		for (int i = 0; i != binary.size(); ++i) {
-			BYTE b;
-			ulong addr = 0x410000 + i;
-			Readmemory(&b, addr, sizeof(b), MM_SILENT);
-			if (binary[i] != b) {
-				hPen = CreatePen(PS_SOLID, 1, RGB(0, b, 0));
-				hBrush = (HBRUSH)GetStockObject(NULL_BRUSH);
-				SelectObject(hdc, hPen);
-				SelectObject(hdc, hBrush);
-
-				int margin_x = 0;
-				int margin_y = 0;
-				int height = 5;
-				int width = 5;
-				int d = addr - 0x400000;
-				int x = d % 0x100;
-				int y = d / 0x100;
-				char text[64];
-				sprintf(text, "x=%02x y=%03x byte=%02x", x, y, b);
-				TextOut(hdc, 10, 10, text, lstrlen(text));
-
-				x = x*margin_x + (x - 1)*width;
-				y = y*margin_y + (y - 1)*height;
-
-				Rectangle(hdc, x, y, x + width, y + height);
-			}
+		if (v_w.empty() && v_r.empty()) {
+			EndPaint(hWnd, &ps);	//描画終了
+			break;
 		}
-		*/
 
-		/*
+		BYTE data;	//アドレスの指す値
+		int x, y;
 
-		hPen = CreatePen(PS_SOLID, 1, RGB(0, 0, 0));// 黒い点線のペンを作成
-		hBrush = (HBRUSH)GetStockObject(NULL_BRUSH);// 空のブラシを取得
-		SelectObject(hdc, hPen);		// 作成したペンを使用するように設定
-		SelectObject(hdc, hBrush);		// 取得したブラシを使用するように設定
-		
-		int margin_x = 0;
-		int margin_y = 0;
-		int height = 5;
-		int width = 5;
-		
-		for (DWORD d : v) {
+		//書込み領域描画
+		for (DWORD d : v_w) {
+			Readmemory(&data, d, sizeof(data), 0);
+
 			d = d - 0x400000;
-			int x = d % 0x100;
-			int y = d / 0x100;
+			x = d % 0x100;
+			y = d / 0x100;
 
-			char text[64];
-			sprintf(text, "x=%02x y=%04x", x, y);
-			TextOut(hdc, 10, 10, text, lstrlen(text));
-
-			x = x*margin_x + (x - 1)*width;
+			x = x*margin_x + (x - 1)*width + 20;
 			y = y*margin_y + (y - 1)*height;
 
+			HPEN hNewPen = CreatePen(PS_SOLID, 1, RGB(0, data, 0));
+			HPEN hOldPen = (HPEN)SelectObject(hdc, hNewPen);
+			HBRUSH hNewBrush = CreateSolidBrush(RGB(0, data, 0));
+			HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, hNewBrush);
+
 			Rectangle(hdc, x, y, x + width, y + height);
-			//SetPixel(hdc, x, y, RGB(0, 0, 0));
+
+			SelectObject(hdc, hOldPen);
+			DeleteObject(hNewPen);
+			SelectObject(hdc, hOldBrush);
+			DeleteObject(hNewBrush);
 		}
 
-		//DeleteObject(hPen);				// 作成したペンを削除
-		*/
+		//読込み領域描画
+		for (DWORD d : v_r) {
+			Readmemory(&data, d, sizeof(data), 0);
 
-		EndPaint(hWnd, &ps);			//描画終了
+			d = d - 0x480000;
+			x = d % 0x100;
+			y = d / 0x100;
+
+			x = x*margin_x + (x - 1)*width + 20;
+			y = y*margin_y + (y - 1)*height;
+
+			HPEN hNewPen = CreatePen(PS_SOLID, 1, RGB(data, data, 0));
+			HPEN hOldPen = (HPEN)SelectObject(hdc, hNewPen);
+			HBRUSH hNewBrush = CreateSolidBrush(RGB(data, data, 0));
+			HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, hNewBrush);
+
+			Rectangle(hdc, x, y, x + width, y + height);
+
+			SelectObject(hdc, hOldPen);
+			DeleteObject(hNewPen);
+			SelectObject(hdc, hOldBrush);
+			DeleteObject(hNewBrush);
+		}
+
+		//char text[64];
+		//sprintf(text, "x=%02x y=%03x data=%02x", x, y, data);
+		//TextOut(hdc, 10, 10, text, lstrlen(text));
+
+		EndPaint(hWnd, &ps);	//描画終了
 		break; }
 	default:
 		return DefWindowProc(hWnd, message, wParam, lParam);
@@ -292,78 +341,98 @@ DWORD checkAsmCode(char* asmCode, t_thread* pthread, DWORD eip){
 	//pthread->reg.r[7];	//EDIへのアクセス例
 	//	DWORD eip = pthread->reg.ip;	←これが何故か落ちる
 
-	char *pattern = "MOV (BYTE|WORD|DWORD) PTR DS:\\[(EAX|ECX|EDX|EBX|ESP|EBP|ESI|EDI)\\].*";
-	std::string string(asmCode);
-	std::regex regex(pattern);
+	std::string code(asmCode);
 	std::smatch match;
+	//char *pattern = "MOV (BYTE|WORD|DWORD) PTR DS:\\[(EAX|ECX|EDX|EBX|ESP|EBP|ESI|EDI)\\].*";	//TODO: [EAX+数値]の形式に対応させる
+	char *pattern_w = "MOV (BYTE|WORD|DWORD) PTR DS:\\[(..|...)\\].*";
+	std::regex regex_w(pattern_w);
+	char *pattern_r = "MOV ...?,(BYTE|WORD|DWORD) PTR DS:\\[(..|...)\\]";
+	std::regex regex_r(pattern_r);
 
-	if (std::regex_match(string, match, regex)){
-		std::string size;
-		std::string reg;
-		std::string addr;
-		std::vector< std::string > result;
+	std::string size_s;
+	int size = 0;
+	std::string reg;
 
-		size = match[1].str();
+	if (std::regex_match(code, match, regex_w)){
+		size_s = match[1].str();
 		reg = match[2].str();
 
-		for (auto && elem : match) {
-			result.push_back(elem.str());
+		if (size_s == "BYTE") {
+			size = 1;
+		}
+		else if (size_s == "WORD") {
+			size = 2;
+		}
+		else if (size_s == "DWORD") {
+			size = 4;
 		}
 
-		if (reg == "EDI"){
-			//ストリームへ変換
-			std::ostringstream ostr;
-			ostr << std::hex << pthread->reg.r[7];
-			//ストリームから文字列へ
-			addr = ostr.str();
-
-			//Vectorへ追加
-			v.push_back(pthread->reg.r[7]);
-		}
-		std::string buf = +"  size:" + size + " reg:" + reg + "=" + addr;
-		char info[256];
-		sprintf(info, "%s", buf.c_str());
+		//Vectorへ追加
+		int i = 0;
+		do{
+			if (reg == "EDI") {
+				v_w.push_back(pthread->reg.r[7] + i);
+			}
+			i++;
+		} while (i < size);
 
 		//ログウィンドウにメモリ書込み命令を出力
+		std::string buf = " [W]  size:" + size_s + " reg:" + reg;
+		char info[256];
+		sprintf(info, "%s", buf.c_str());
 		Addtolist(eip, -1, asmCode);
 		Addtolist(eip, -1, info);
 
-		//------------------------------
-		PAINTSTRUCT ps;
+		//更新領域通知
 		DWORD d = pthread->reg.r[7];
-		BYTE data;
-		ulong length;
-		length = Readmemory(&data, d, sizeof(data), 0);
-
-		HDC hdc = GetDC(hwplugin);
-		HPEN hPen;
-		HBRUSH hBrush;
-		hPen = CreatePen(PS_SOLID, 1, RGB(0, data, 0));
-		hBrush = CreateSolidBrush(RGB(0, data, 0));
-		SelectObject(hdc, hPen);
-		SelectObject(hdc, hBrush);
-		int margin_x = 0;
-		int margin_y = 0;
-		int height = 4;
-		int width = 4;
-
 		d = d - 0x400000;
 		int x = d % 0x100;
 		int y = d / 0x100;
-		
-		char text[64];
-		sprintf(text, "x=%02x y=%03x data=%02x length=%d", x, y, data, length);
-		TextOut(hdc, 10, 10, text, lstrlen(text));
-
-		x = x*margin_x + (x - 1)*width +20;
+		x = x*margin_x + (x - 1)*width + 20;
 		y = y*margin_y + (y - 1)*height;
+		const RECT rc = {x, y, (x+width)*size, (y+height)*size};
+		InvalidateRect(hwplugin, &rc, FALSE);
+	}
 
-		Rectangle(hdc, x, y, x + width, y + height);
+	else if (std::regex_match(code, match, regex_r)) {
+		size_s = match[1].str();
+		reg = match[2].str();
 
-		ReleaseDC(hwplugin, hdc);
-		DeleteObject(hPen);
-		DeleteObject(hBrush);
-		//------------------------------
+		if (size_s == "BYTE") {
+			size = 1;
+		}
+		else if (size_s == "WORD") {
+			size = 2;
+		}
+		else if (size_s == "DWORD") {
+			size = 4;
+		}
+
+		//Vectorへ追加
+		int i = 0;
+		do {
+			if (reg == "ESI") {
+				v_r.push_back(pthread->reg.r[6] + i);
+			}
+			i++;
+		} while (i < size);
+
+		//ログウィンドウにメモリ読込み命令を出力
+		std::string buf = " [R]  size:" + size_s + " reg:" + reg;
+		char info[256];
+		sprintf(info, "%s", buf.c_str());
+		Addtolist(eip, -1, asmCode);
+		Addtolist(eip, -1, info);
+
+		//更新領域通知
+		DWORD d = pthread->reg.r[6];
+		d = d - 0x480000;
+		int x = d % 0x100;
+		int y = d / 0x100;
+		x = x*margin_x + (x - 1)*width + 20;
+		y = y*margin_y + (y - 1)*height;
+		const RECT rc = { x, y, (x + width)*size, (y + height)*size };
+		InvalidateRect(hwplugin, &rc, FALSE);
 	}
 
 	return NULL;
