@@ -17,6 +17,8 @@ BOOL InitInstance(HINSTANCE);
 ATOM MyRegisterClass(HINSTANCE);
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 DWORD checkAsmCode(char*, t_thread*, DWORD);
+void PaintByteMemory(DWORD, char);
+void PrintMemoryBlock(DWORD, int, char);
 
 HINSTANCE	hinst;			// DLL instance
 HWND		hwmain;			// Handle of main OllyDbg window
@@ -28,8 +30,8 @@ std::vector<BYTE> binary;
 
 int margin_x = 0;
 int margin_y = 0;
-int height = 2;
-int width = 2;
+int height = 3;
+int width = 3;
 
 BOOL WINAPI DllEntryPoint(HINSTANCE hi, DWORD reason, LPVOID reserved) {
 	if (reason == DLL_PROCESS_ATTACH)
@@ -268,6 +270,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	case WM_PAINT: {
 		hdc = BeginPaint(hWnd, &ps);	//描画開始
 
+		
 		if (v_w.empty() && v_r.empty()) {
 			EndPaint(hWnd, &ps);	//描画終了
 			break;
@@ -323,6 +326,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			SelectObject(hdc, hOldBrush);
 			DeleteObject(hNewBrush);
 		}
+		
 
 		//char text[64];
 		//sprintf(text, "x=%02x y=%03x data=%02x", x, y, data);
@@ -339,7 +343,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 DWORD checkAsmCode(char* asmCode, t_thread* pthread, DWORD eip){
 
 	//pthread->reg.r[7];	//EDIへのアクセス例
-	//	DWORD eip = pthread->reg.ip;	←これが何故か落ちる
+	//DWORD eip = pthread->reg.ip;	←これが何故か落ちる
 
 	std::string code(asmCode);
 	std::smatch match;
@@ -372,6 +376,7 @@ DWORD checkAsmCode(char* asmCode, t_thread* pthread, DWORD eip){
 		do{
 			if (reg == "EDI") {
 				v_w.push_back(pthread->reg.r[7] + i);
+				PaintByteMemory(pthread->reg.r[7] + i, 'w');
 			}
 			i++;
 		} while (i < size);
@@ -383,6 +388,11 @@ DWORD checkAsmCode(char* asmCode, t_thread* pthread, DWORD eip){
 		Addtolist(eip, -1, asmCode);
 		Addtolist(eip, -1, info);
 
+		//if (reg == "EDI") {
+		//	PrintMemoryBlock(pthread->reg.r[7], size, 'w');
+		//}
+
+		/*
 		//更新領域通知
 		DWORD d = pthread->reg.r[7];
 		d = d - 0x400000;
@@ -392,6 +402,7 @@ DWORD checkAsmCode(char* asmCode, t_thread* pthread, DWORD eip){
 		y = y*margin_y + (y - 1)*height;
 		const RECT rc = {x, y, (x+width)*size, (y+height)*size};
 		InvalidateRect(hwplugin, &rc, FALSE);
+		*/
 	}
 
 	else if (std::regex_match(code, match, regex_r)) {
@@ -413,6 +424,7 @@ DWORD checkAsmCode(char* asmCode, t_thread* pthread, DWORD eip){
 		do {
 			if (reg == "ESI") {
 				v_r.push_back(pthread->reg.r[6] + i);
+				PaintByteMemory(pthread->reg.r[6] + i, 'r');
 			}
 			i++;
 		} while (i < size);
@@ -424,6 +436,11 @@ DWORD checkAsmCode(char* asmCode, t_thread* pthread, DWORD eip){
 		Addtolist(eip, -1, asmCode);
 		Addtolist(eip, -1, info);
 
+		//if (reg == "ESI") {
+		//	PrintMemoryBlock(pthread->reg.r[6], size, 'r');
+		//}
+
+		/*
 		//更新領域通知
 		DWORD d = pthread->reg.r[6];
 		d = d - 0x480000;
@@ -433,8 +450,106 @@ DWORD checkAsmCode(char* asmCode, t_thread* pthread, DWORD eip){
 		y = y*margin_y + (y - 1)*height;
 		const RECT rc = { x, y, (x + width)*size, (y + height)*size };
 		InvalidateRect(hwplugin, &rc, FALSE);
+		*/
 	}
 
 	return NULL;
+}
+
+void PaintByteMemory(DWORD mem, char mode) {
+
+	BYTE data;
+
+	ulong length = Readmemory(&data, mem, sizeof(data), 0);
+
+	HDC hdc = GetDC(hwplugin);
+	HPEN hNewPen = NULL, hOldPen = NULL;
+	HBRUSH hNewBrush = NULL, hOldBrush = NULL;
+
+	if (mode == 'w') {
+		hNewPen = CreatePen(PS_SOLID, 1, RGB(0, data, 0));
+		hOldPen = (HPEN)SelectObject(hdc, hNewPen);
+		hNewBrush = CreateSolidBrush(RGB(0, data, 0));
+		hOldBrush = (HBRUSH)SelectObject(hdc, hNewBrush);
+	}
+	else if (mode == 'r') {
+		hNewPen = CreatePen(PS_SOLID, 1, RGB(data, data, 0));
+		hOldPen = (HPEN)SelectObject(hdc, hNewPen);
+		hNewBrush = CreateSolidBrush(RGB(data, data, 0));
+		hOldBrush = (HBRUSH)SelectObject(hdc, hNewBrush);
+	}
+
+	mem = mem - 0x400000;
+	int x = mem % 0x100;
+	int y = mem / 0x100;
+
+	x = x*margin_x + (x - 1)*width + 20;
+	y = y*margin_y + (y - 1)*height;
+
+	Rectangle(hdc, x, y, x + width, y + height);
+
+	SelectObject(hdc, hOldPen);
+	DeleteObject(hNewPen);
+	SelectObject(hdc, hOldBrush);
+	DeleteObject(hNewBrush);
+
+	char text[64];
+	sprintf(text, "mem=%08x x=%d y=%d data=%02x length=%d", mem, x, y, data, length);
+	TextOut(hdc, 10, 10, text, lstrlen(text));
+
+	ReleaseDC(hwplugin, hdc);
+}
+
+void PrintMemoryBlock(DWORD mem, int size, char mode) {
+
+	BYTE* data;
+	int x, y;
+
+	data = (BYTE*)malloc(size);
+
+	ulong length = Readmemory(data, mem, size, 0);	//サイズを指定しても何故か1バイトしか読み込まない
+
+	HDC hdc = GetDC(hwplugin);
+	HPEN hNewPen=NULL, hOldPen=NULL;
+	HBRUSH hNewBrush = NULL, hOldBrush = NULL;
+
+	int i = 0;
+	do {
+		DWORD d = mem+i;
+		d = d - 0x400000;
+		x = d % 0x100;
+		y = d / 0x100;
+
+		x = x*margin_x + (x - 1)*width + 20;
+		y = y*margin_y + (y - 1)*height;
+
+		if (mode == 'w') {
+			hNewPen = CreatePen(PS_SOLID, 1, RGB(0, data[i], 0));
+			hOldPen = (HPEN)SelectObject(hdc, hNewPen);
+			hNewBrush = CreateSolidBrush(RGB(0, data[i], 0));
+			hOldBrush = (HBRUSH)SelectObject(hdc, hNewBrush);
+		}
+		else if (mode == 'r') {
+			hNewPen = CreatePen(PS_SOLID, 1, RGB(data[i], data[i], 0));
+			hOldPen = (HPEN)SelectObject(hdc, hNewPen);
+			hNewBrush = CreateSolidBrush(RGB(data[i], data[i], 0));
+			hOldBrush = (HBRUSH)SelectObject(hdc, hNewBrush);
+		}
+
+		Rectangle(hdc, x, y, x + width, y + height);
+
+		SelectObject(hdc, hOldPen);
+		DeleteObject(hNewPen);
+		SelectObject(hdc, hOldBrush);
+		DeleteObject(hNewBrush);
+		i++;
+	} while (i < size);
+
+	char text[64];
+	sprintf(text, "mem=%08x x=%d y=%d data=%08x length=%d", mem, x, y, *data, length);
+	TextOut(hdc, 10, 10, text, lstrlen(text));
+		
+	ReleaseDC(hwplugin, hdc);
+	free(data);
 }
 
