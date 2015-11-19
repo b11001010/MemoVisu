@@ -24,9 +24,10 @@ HINSTANCE	hinst;			// DLL instance
 HWND		hwmain;			// Handle of main OllyDbg window
 HWND		hwplugin;		// Plugin window
 
-std::vector<DWORD> v_w;
-std::vector<DWORD> v_r;
-std::vector<BYTE> binary;
+std::vector<std::vector<DWORD>> v_w(1);
+std::vector<DWORD > v_r;
+//std::vector<std::vector<DWORD>> v_r;
+//std::vector<BYTE> binary;
 
 int margin_x = 0;
 int margin_y = 0;
@@ -264,7 +265,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			y += dy;
 			ScrollWindow(hWnd, 0, -dy, NULL, NULL);
 			SetScrollPos(hWnd, SB_VERT, y, TRUE);
-			UpdateWindow(hWnd);
+			InvalidateRect(hWnd, NULL, FALSE);
 		}
 		break;
 	case WM_PAINT: {
@@ -280,27 +281,29 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		int x, y;
 
 		//‘‚İ—Ìˆæ•`‰æ
-		for (DWORD d : v_w) {
-			Readmemory(&data, d, sizeof(data), 0);
+		for (std::vector<DWORD> v : v_w) {
+			for (DWORD d : v) {
+				Readmemory(&data, d, sizeof(data), 0);
 
-			d = d - 0x400000;
-			x = d % 0x100;
-			y = d / 0x100;
+				d = d - 0x400000;
+				x = d % 0x100;
+				y = d / 0x100;
 
-			x = x*margin_x + (x - 1)*width + 20;
-			y = y*margin_y + (y - 1)*height;
+				x = x*margin_x + (x - 1)*width + 20;
+				y = y*margin_y + (y - 1)*height;
 
-			HPEN hNewPen = CreatePen(PS_SOLID, 1, RGB(0, data, 0));
-			HPEN hOldPen = (HPEN)SelectObject(hdc, hNewPen);
-			HBRUSH hNewBrush = CreateSolidBrush(RGB(0, data, 0));
-			HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, hNewBrush);
+				HPEN hNewPen = CreatePen(PS_SOLID, 1, RGB(0, data, 0));
+				HPEN hOldPen = (HPEN)SelectObject(hdc, hNewPen);
+				HBRUSH hNewBrush = CreateSolidBrush(RGB(0, data, 0));
+				HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, hNewBrush);
 
-			Rectangle(hdc, x, y, x + width, y + height);
+				Rectangle(hdc, x, y, x + width, y + height);
 
-			SelectObject(hdc, hOldPen);
-			DeleteObject(hNewPen);
-			SelectObject(hdc, hOldBrush);
-			DeleteObject(hNewBrush);
+				SelectObject(hdc, hOldPen);
+				DeleteObject(hNewPen);
+				SelectObject(hdc, hOldBrush);
+				DeleteObject(hNewBrush);
+			}
 		}
 
 		//“Ç‚İ—Ìˆæ•`‰æ
@@ -355,11 +358,13 @@ DWORD checkAsmCode(char* asmCode, t_thread* pthread, DWORD eip){
 
 	std::string size_s;
 	int size = 0;
-	std::string reg;
+	std::string reg_s;
+	int reg_num;
+	DWORD reg;
 
 	if (std::regex_match(code, match, regex_w)){
 		size_s = match[1].str();
-		reg = match[2].str();
+		reg_s = match[2].str();
 
 		if (size_s == "BYTE") {
 			size = 1;
@@ -371,43 +376,67 @@ DWORD checkAsmCode(char* asmCode, t_thread* pthread, DWORD eip){
 			size = 4;
 		}
 
-		//Vector‚Ö’Ç‰Á
-		int i = 0;
-		do{
-			if (reg == "EDI") {
-				v_w.push_back(pthread->reg.r[7] + i);
-				PaintByteMemory(pthread->reg.r[7] + i, 'w');
+		if (reg_s == "EDI") {
+			reg_num = 7;
+		}
+		reg = pthread->reg.r[reg_num];
+
+		int layer = 0;
+
+		// ŠK‘wŠT”Oˆ—
+		if (v_w.empty()) {		// ŠK‘w‚ª‚Ü‚¾–³‚¢ê‡
+			std::vector<DWORD> v;
+			int i = 0;
+			do {
+				v.push_back(reg + i);			
+				PaintByteMemory(reg + i, 'w');	// •`‰æ
+				i++;
+			} while (i < size);
+			v_w.push_back(v);	// 0ŠK‘w‚Ì”z—ñ‚É‘‚«‚İƒTƒCƒY•ª‚ÌƒAƒhƒŒƒX‚ğ’Ç‰Á
+		}
+		else {					//ŠK‘w‚ª‚ ‚éê‡
+			int eip_layer = 0;	// EIP‚ª‘¶İ‚·‚éŠK‘w”z—ñ‚Ì—v‘f
+			int layer_size = v_w.size();	// Œ»İ‚ÌŠK‘w‚Ì”
+			for (int i = 0; i < layer_size; i++) {
+				for (DWORD addr : v_w[i]) {
+					if (eip == addr) {		// EIP‚Ì’l‚ªŠù‚É‘‚«‚Ü‚ê‚½ƒAƒhƒŒƒX‚Ìê‡
+						eip_layer = i;			// EIP‚ª‘¶İ‚·‚éŠK‘w”z—ñ‚Ì—v‘f‚ğXV
+					}
+				}
 			}
-			i++;
-		} while (i < size);
+			if (eip_layer + 1 > layer_size - 1) {	// ’Ç‰Á‚·‚×‚«ŠK‘w‚ÍEIP‚ª‘¶İ‚·‚éŠK‘w—v‘f+1C’Ç‰Á‚·‚×‚«ŠK‘w‚ª‚Ü‚¾–³‚¢ê‡
+				std::vector<DWORD> v;
+				int i = 0;
+				do {
+					v.push_back(reg + i);
+					PaintByteMemory(reg + i, 'w');// •`‰æ
+					i++;
+				} while (i < size);
+				v_w.push_back(v);	// V‚µ‚¢ŠK‘w‚ğ’Ç‰Á
+			}
+			else {	// ’Ç‰Á‚·‚×‚«ŠK‘w‚Ö’Ç‰Á
+				int i = 0;
+				do {
+					v_w[eip_layer + 1].push_back(reg + i);
+					PaintByteMemory(reg + i, 'w');//•`‰æ
+					i++;
+				} while (i < size);
+			}
+
+			layer = eip_layer + 1;
+		}
 
 		//ƒƒOƒEƒBƒ“ƒhƒE‚Éƒƒ‚ƒŠ‘‚İ–½—ß‚ğo—Í
-		std::string buf = " [W]  size:" + size_s + " reg:" + reg;
+		std::string buf = " [W]  size:" + size_s + " reg:" + reg_s + " layer:" + std::to_string(layer);
 		char info[256];
 		sprintf(info, "%s", buf.c_str());
 		Addtolist(eip, -1, asmCode);
 		Addtolist(eip, -1, info);
-
-		//if (reg == "EDI") {
-		//	PrintMemoryBlock(pthread->reg.r[7], size, 'w');
-		//}
-
-		/*
-		//XV—Ìˆæ’Ê’m
-		DWORD d = pthread->reg.r[7];
-		d = d - 0x400000;
-		int x = d % 0x100;
-		int y = d / 0x100;
-		x = x*margin_x + (x - 1)*width + 20;
-		y = y*margin_y + (y - 1)*height;
-		const RECT rc = {x, y, (x+width)*size, (y+height)*size};
-		InvalidateRect(hwplugin, &rc, FALSE);
-		*/
 	}
 
 	else if (std::regex_match(code, match, regex_r)) {
 		size_s = match[1].str();
-		reg = match[2].str();
+		reg_s = match[2].str();
 
 		if (size_s == "BYTE") {
 			size = 1;
@@ -422,7 +451,7 @@ DWORD checkAsmCode(char* asmCode, t_thread* pthread, DWORD eip){
 		//Vector‚Ö’Ç‰Á
 		int i = 0;
 		do {
-			if (reg == "ESI") {
+			if (reg_s == "ESI") {
 				v_r.push_back(pthread->reg.r[6] + i);
 				PaintByteMemory(pthread->reg.r[6] + i, 'r');
 			}
@@ -430,27 +459,11 @@ DWORD checkAsmCode(char* asmCode, t_thread* pthread, DWORD eip){
 		} while (i < size);
 
 		//ƒƒOƒEƒBƒ“ƒhƒE‚Éƒƒ‚ƒŠ“Ç‚İ–½—ß‚ğo—Í
-		std::string buf = " [R]  size:" + size_s + " reg:" + reg;
+		std::string buf = " [R]  size:" + size_s + " reg:" + reg_s;
 		char info[256];
 		sprintf(info, "%s", buf.c_str());
 		Addtolist(eip, -1, asmCode);
 		Addtolist(eip, -1, info);
-
-		//if (reg == "ESI") {
-		//	PrintMemoryBlock(pthread->reg.r[6], size, 'r');
-		//}
-
-		/*
-		//XV—Ìˆæ’Ê’m
-		DWORD d = pthread->reg.r[6];
-		d = d - 0x480000;
-		int x = d % 0x100;
-		int y = d / 0x100;
-		x = x*margin_x + (x - 1)*width + 20;
-		y = y*margin_y + (y - 1)*height;
-		const RECT rc = { x, y, (x + width)*size, (y + height)*size };
-		InvalidateRect(hwplugin, &rc, FALSE);
-		*/
 	}
 
 	return NULL;
