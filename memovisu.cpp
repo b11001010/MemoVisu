@@ -8,6 +8,7 @@
 #include <iostream>
 #include <sstream>
 #include <vector>
+#include <map>
 #include <algorithm>
 
 #include "plugin.h"
@@ -24,10 +25,10 @@ HINSTANCE	hinst;			// DLL instance
 HWND		hwmain;			// Handle of main OllyDbg window
 HWND		hwplugin;		// Plugin window
 
-std::vector<std::vector<DWORD>> v_w(1);
-std::vector<DWORD > v_r;
-//std::vector<std::vector<DWORD>> v_r;
-//std::vector<BYTE> binary;
+
+std::map<DWORD, int> layer_map;
+std::vector<std::vector<DWORD>> vector_w;
+std::vector<std::vector<DWORD>> vector_r;
 
 int margin_x = 0;
 int margin_y = 0;
@@ -271,17 +272,16 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	case WM_PAINT: {
 		hdc = BeginPaint(hWnd, &ps);	//描画開始
 
-		
-		if (v_w.empty() && v_r.empty()) {
+		if (vector_w.empty() && vector_r.empty()) {
 			EndPaint(hWnd, &ps);	//描画終了
 			break;
 		}
 
 		BYTE data;	//アドレスの指す値
 		int x, y;
-
+		
 		//書込み領域描画
-		for (std::vector<DWORD> v : v_w) {
+		for (std::vector<DWORD> v : vector_w) {
 			for (DWORD d : v) {
 				Readmemory(&data, d, sizeof(data), 0);
 
@@ -307,34 +307,35 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		}
 
 		//読込み領域描画
-		for (DWORD d : v_r) {
-			Readmemory(&data, d, sizeof(data), 0);
+		for (std::vector<DWORD> v : vector_r) {
+			for (DWORD d : v) {
+				Readmemory(&data, d, sizeof(data), 0);
 
-			d = d - 0x480000;
-			x = d % 0x100;
-			y = d / 0x100;
+				d = d - 0x480000;
+				x = d % 0x100;
+				y = d / 0x100;
 
-			x = x*margin_x + (x - 1)*width + 20;
-			y = y*margin_y + (y - 1)*height;
+				x = x*margin_x + (x - 1)*width + 20;
+				y = y*margin_y + (y - 1)*height;
 
-			HPEN hNewPen = CreatePen(PS_SOLID, 1, RGB(data, data, 0));
-			HPEN hOldPen = (HPEN)SelectObject(hdc, hNewPen);
-			HBRUSH hNewBrush = CreateSolidBrush(RGB(data, data, 0));
-			HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, hNewBrush);
+				HPEN hNewPen = CreatePen(PS_SOLID, 1, RGB(data, data, 0));
+				HPEN hOldPen = (HPEN)SelectObject(hdc, hNewPen);
+				HBRUSH hNewBrush = CreateSolidBrush(RGB(data, data, 0));
+				HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, hNewBrush);
 
-			Rectangle(hdc, x, y, x + width, y + height);
+				Rectangle(hdc, x, y, x + width, y + height);
 
-			SelectObject(hdc, hOldPen);
-			DeleteObject(hNewPen);
-			SelectObject(hdc, hOldBrush);
-			DeleteObject(hNewBrush);
+				SelectObject(hdc, hOldPen);
+				DeleteObject(hNewPen);
+				SelectObject(hdc, hOldBrush);
+				DeleteObject(hNewBrush);
+			}
 		}
 		
 
 		//char text[64];
 		//sprintf(text, "x=%02x y=%03x data=%02x", x, y, data);
 		//TextOut(hdc, 10, 10, text, lstrlen(text));
-
 		EndPaint(hWnd, &ps);	//描画終了
 		break; }
 	default:
@@ -376,58 +377,46 @@ DWORD checkAsmCode(char* asmCode, t_thread* pthread, DWORD eip){
 			size = 4;
 		}
 
+		// 書き込み先アドレス
 		if (reg_s == "EDI") {
 			reg_num = 7;
 		}
 		reg = pthread->reg.r[reg_num];
-
-		int layer = 0;
-
-		// 階層概念処理
-		if (v_w.empty()) {		// 階層がまだ無い場合
-			std::vector<DWORD> v;
+		
+		//EIPで階層マップを検索
+		auto itr = layer_map.find(eip);
+		if (itr != layer_map.end()) {
+			//存在する場合，書き込み先アドレスの階層レベルをEIPの階層レベル+1に設定
+			int new_layer_level = layer_map[eip] + 1;
+			while (vector_w.size() <= new_layer_level) {
+				std::vector<DWORD> v;
+				vector_w.push_back(v);
+			}
 			int i = 0;
 			do {
-				v.push_back(reg + i);			
+				layer_map[reg + i] = new_layer_level;
+				vector_w[new_layer_level].push_back(reg + i);
 				PaintByteMemory(reg + i, 'w');	// 描画
 				i++;
 			} while (i < size);
-			v_w.push_back(v);	// 0階層の配列に書き込みサイズ分のアドレスを追加
 		}
-		else {					//階層がある場合
-			int eip_layer = 0;	// EIPが存在する階層配列の要素
-			int layer_size = v_w.size();	// 現在の階層の数
-			for (int i = 0; i < layer_size; i++) {
-				for (DWORD addr : v_w[i]) {
-					if (eip == addr) {		// EIPの値が既に書き込まれたアドレスの場合
-						eip_layer = i;			// EIPが存在する階層配列の要素を更新
-					}
-				}
-			}
-			if (eip_layer + 1 > layer_size - 1) {	// 追加すべき階層はEIPが存在する階層要素+1，追加すべき階層がまだ無い場合
+		else {
+			//存在しない場合，書き込み先アドレスの階層レベルを1に設定
+			while (vector_w.size() <= 1) {
 				std::vector<DWORD> v;
-				int i = 0;
-				do {
-					v.push_back(reg + i);
-					PaintByteMemory(reg + i, 'w');// 描画
-					i++;
-				} while (i < size);
-				v_w.push_back(v);	// 新しい階層を追加
+				vector_w.push_back(v);
 			}
-			else {	// 追加すべき階層へ追加
-				int i = 0;
-				do {
-					v_w[eip_layer + 1].push_back(reg + i);
-					PaintByteMemory(reg + i, 'w');//描画
-					i++;
-				} while (i < size);
-			}
-
-			layer = eip_layer + 1;
+			int i = 0;
+			do {
+				layer_map[reg + i] = 1;
+				vector_w[1].push_back(reg+i);
+				PaintByteMemory(reg + i, 'w');	// 描画
+				i++;
+			} while (i < size);
 		}
 
 		//ログウィンドウにメモリ書込み命令を出力
-		std::string buf = " [W]  size:" + size_s + " reg:" + reg_s + " layer:" + std::to_string(layer);
+		std::string buf = " [W]  size:" + size_s + " reg:" + reg_s;
 		char info[256];
 		sprintf(info, "%s", buf.c_str());
 		Addtolist(eip, -1, asmCode);
@@ -448,12 +437,38 @@ DWORD checkAsmCode(char* asmCode, t_thread* pthread, DWORD eip){
 			size = 4;
 		}
 
-		//Vectorへ追加
+
+		// 読み込み先アドレス
+		if (reg_s == "ESI") {
+			reg_num = 6;
+		}
+		else {
+			return NULL;
+		}
+		reg = pthread->reg.r[reg_num];
+
 		int i = 0;
 		do {
-			if (reg_s == "ESI") {
-				v_r.push_back(pthread->reg.r[6] + i);
-				PaintByteMemory(pthread->reg.r[6] + i, 'r');
+			//読み込み先アドレスで階層マップを検索
+			auto itr = layer_map.find(reg + i);
+			if (itr != layer_map.end()) {
+				//存在する場合，読み込み先アドレスを該当階層レベル配列に追加
+				int layer_level = layer_map[reg+i];
+				while (vector_w.size() <= layer_level) {
+					std::vector<DWORD> v;
+					vector_w.push_back(v);
+				}
+				vector_r[layer_level].push_back(reg + i);
+				PaintByteMemory(reg + i, 'r');	// 描画
+			}
+			else {
+				//存在しない場合，読み込み先アドレスを階層レベル0配列に追加
+				if (vector_r.empty()) {
+					std::vector<DWORD> v;
+					vector_r.push_back(v);
+				}
+				vector_r[0].push_back(reg + i);
+				PaintByteMemory(reg + i, 'r');	// 描画
 			}
 			i++;
 		} while (i < size);
@@ -484,15 +499,17 @@ void PaintByteMemory(DWORD mem, char mode) {
 		hOldPen = (HPEN)SelectObject(hdc, hNewPen);
 		hNewBrush = CreateSolidBrush(RGB(0, data, 0));
 		hOldBrush = (HBRUSH)SelectObject(hdc, hNewBrush);
+		mem = mem - 0x400000;
 	}
 	else if (mode == 'r') {
 		hNewPen = CreatePen(PS_SOLID, 1, RGB(data, data, 0));
 		hOldPen = (HPEN)SelectObject(hdc, hNewPen);
 		hNewBrush = CreateSolidBrush(RGB(data, data, 0));
 		hOldBrush = (HBRUSH)SelectObject(hdc, hNewBrush);
+		mem = mem - 0x480000;
 	}
 
-	mem = mem - 0x400000;
+	//mem = mem - 0x400000;
 	int x = mem % 0x100;
 	int y = mem / 0x100;
 
