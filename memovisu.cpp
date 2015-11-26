@@ -1,6 +1,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 
 #include <windows.h>
+#include <commctrl.h>
 #include <stdio.h>
 #include <tchar.h>
 #include <regex>
@@ -12,6 +13,22 @@
 #include <algorithm>
 
 #include "plugin.h"
+#include "resource.h"
+
+#pragma comment(lib, "comctl32.lib")      // ツールバーの作成に必要
+
+// グローバル変数:
+HINSTANCE hInst;                          // 現在のインターフェイス
+HWND hToolBar;        // ツールバーのウィンドウハンドル
+WNDPROC defProc;
+
+// TBBUTTON（ツールバーボタン）型の配列
+TBBUTTON tbButton[] = {
+	{ 0 , ID_BUTTON1 , TBSTATE_ENABLED , TBSTYLE_BUTTON | BTNS_AUTOSIZE , 0 , 0 , 0 } ,
+	{ 1 , ID_BUTTON2 , TBSTATE_ENABLED , TBSTYLE_BUTTON | BTNS_AUTOSIZE , 0 , 0 , 0 } ,
+	{ 2 , ID_BUTTON3 , TBSTATE_ENABLED , TBSTYLE_BUTTON | BTNS_AUTOSIZE , 0 , 0 , 0 }
+};
+TBBUTTON tbSPACE = { 0, 0, TBSTATE_ENABLED, TBSTYLE_SEP, 0, 0L };
 
 // 関数プロトタイプ
 BOOL InitInstance(HINSTANCE);
@@ -20,6 +37,7 @@ LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 DWORD checkAsmCode(char*, t_thread*, DWORD);
 void PaintByteMemory(DWORD, char);
 void PrintMemoryBlock(DWORD, int, char);
+LRESULT CALLBACK ToolbarProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 HINSTANCE	hinst;			// DLL instance
 HWND		hwmain;			// Handle of main OllyDbg window
@@ -203,7 +221,7 @@ ATOM MyRegisterClass(HINSTANCE hInstance)
 	wcex.hIcon = LoadIcon(NULL, IDI_APPLICATION);
 	wcex.hCursor = LoadCursor(NULL, IDC_ARROW);
 	wcex.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-	wcex.lpszMenuName = NULL;
+	wcex.lpszMenuName = TEXT("IDR_MENU");
 	wcex.lpszClassName = TEXT("TEST");
 	wcex.hIconSm = LoadIcon(NULL, IDI_APPLICATION);
 
@@ -224,11 +242,63 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	static int range;//最大スクロール範囲
 	static int yclient;//現在のクライアント領域の高さ
 
+	int wmId, wmEvent;
+
+	int wmax, iString0, iString1, iString2;
+	TCHAR szBuf[128];
+	static UINT uToolStyle;
+
 	switch (message)
 	{
 	case WM_CREATE:
 		wx = GetSystemMetrics(SM_CXSCREEN);
 		wy = GetSystemMetrics(SM_CYSCREEN);
+
+		InitCommonControls();
+		wmax = GetSystemMetrics(SM_CXSCREEN);
+		hInst = (HINSTANCE)GetWindowLong(hWnd, GWL_HINSTANCE);
+		hToolBar = CreateWindowEx(
+			0,                          // 拡張スタイルなし
+			TOOLBARCLASSNAME,           // クラスネーム
+			NULL,                       // ウィンドウタイトル
+			WS_CHILD | WS_VISIBLE,      // ウィンドウスタイル
+			0, 0,                       // ウィンドウ位置
+			wmax, 40,                   // ウィンドウ幅、高さ
+			hWnd,                       // 親ウィンドウ
+			(HMENU)IDW_TOOL,            // コントロール識別子
+			hInst,                      // インスタンスハンドル
+			NULL);
+		SendMessage(hToolBar, TB_BUTTONSTRUCTSIZE, (WPARAM)sizeof(TBBUTTON), 0);
+
+		/* ツールバーボタンに文字列を貼り付け */
+		LoadString(hInst, IDC_BUTTON1, (LPTSTR)&szBuf, sizeof(szBuf) - 1);
+		iString0 = SendMessage(hToolBar, TB_ADDSTRING, 0, (LPARAM)szBuf);
+		LoadString(hInst, IDC_BUTTON2, (LPTSTR)&szBuf, sizeof(szBuf) - 1);
+		iString1 = SendMessage(hToolBar, TB_ADDSTRING, 0, (LPARAM)szBuf);
+		LoadString(hInst, IDC_BUTTON3, (LPTSTR)&szBuf, sizeof(szBuf) - 1);
+		iString2 = SendMessage(hToolBar, TB_ADDSTRING, 0, (LPARAM)szBuf);
+		tbButton[0].iString = iString0;
+		tbButton[1].iString = iString1;
+		tbButton[2].iString = iString2;
+
+		/* ツールバーにボタンを挿入 */
+		SendMessage(hToolBar, TB_ADDBUTTONS,
+			(WPARAM)(sizeof(tbButton) / sizeof(TBBUTTON)), (LPARAM)(LPTBBUTTON)&tbButton);
+		// ボタンの区切りを挿入
+		SendMessage(hToolBar, TB_INSERTBUTTON, 2, (LPARAM)&tbSPACE);
+
+		/* ツールバーサブクラス化 */
+		defProc = (WNDPROC)GetWindowLong(hToolBar, GWL_WNDPROC);
+		SetWindowLong(hToolBar, GWL_WNDPROC, (LONG)ToolbarProc);
+		SetWindowLong(hToolBar, GWL_USERDATA, (LONG)defProc);
+
+		/* フラットツールバー */
+		uToolStyle = (UINT)GetWindowLong(hToolBar, GWL_STYLE);
+		uToolStyle |= (TBSTYLE_FLAT);
+		SetWindowLong(hToolBar, GWL_STYLE, (LONG)uToolStyle);
+		SendMessage(hToolBar, TB_AUTOSIZE, 0, 0);
+		InvalidateRect(hToolBar, NULL, TRUE);
+
 		break;
 	case WM_DESTROY:
 		hwplugin = NULL;
@@ -239,6 +309,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		y = min(y, range);
 		SetScrollRange(hWnd, SB_VERT, 0, range, FALSE);
 		SetScrollPos(hWnd, SB_VERT, y, TRUE);
+
+		MoveWindow(hToolBar, 0, 0, LOWORD(lParam), HIWORD(lParam), TRUE);
 		break;
 	case WM_VSCROLL:
 		switch (LOWORD(wParam)) {
@@ -338,6 +410,19 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		//TextOut(hdc, 10, 10, text, lstrlen(text));
 		EndPaint(hWnd, &ps);	//描画終了
 		break; }
+	case WM_COMMAND:
+		wmId = LOWORD(wParam);
+		wmEvent = HIWORD(wParam);
+		// 選択されたメニューの解析
+		switch (wmId)
+		{
+		case ID_EXIT:
+			hwplugin = NULL;
+			break;
+		default:
+			return DefWindowProc(hWnd, message, wParam, lParam);
+		}
+		break;
 	default:
 		return DefWindowProc(hWnd, message, wParam, lParam);
 	}
@@ -583,3 +668,18 @@ void PrintMemoryBlock(DWORD mem, int size, char mode) {
 	free(data);
 }
 
+/* ツールバーサブクラス */
+LRESULT CALLBACK ToolbarProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+	switch (msg)
+	{
+	case WM_RBUTTONDOWN:
+	case WM_RBUTTONUP:
+		if (SendMessage(hWnd, TB_GETHOTITEM, 0, 0) >= 0)
+		{
+			ReleaseCapture();
+		}
+		return 0;
+	}
+	return CallWindowProc(defProc, hWnd, msg, wParam, lParam);
+}
