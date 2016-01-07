@@ -18,17 +18,7 @@
 #pragma comment(lib, "comctl32.lib")      // ツールバーの作成に必要
 
 // グローバル変数:
-HINSTANCE hInst;                          // 現在のインターフェイス
-HWND hToolBar;        // ツールバーのウィンドウハンドル
-WNDPROC defProc;
-
-// TBBUTTON（ツールバーボタン）型の配列
-TBBUTTON tbButton[] = {
-	{ 0 , ID_BUTTON1 , TBSTATE_ENABLED , TBSTYLE_BUTTON | BTNS_AUTOSIZE , 0 , 0 , 0 } ,
-	{ 1 , ID_BUTTON2 , TBSTATE_ENABLED , TBSTYLE_BUTTON | BTNS_AUTOSIZE , 0 , 0 , 0 } ,
-	{ 2 , ID_BUTTON3 , TBSTATE_ENABLED , TBSTYLE_BUTTON | BTNS_AUTOSIZE , 0 , 0 , 0 }
-};
-TBBUTTON tbSPACE = { 0, 0, TBSTATE_ENABLED, TBSTYLE_SEP, 0, 0L };
+HANDLE hWrite, hProcess;
 
 // 関数プロトタイプ
 BOOL InitInstance(HINSTANCE);
@@ -36,8 +26,10 @@ ATOM MyRegisterClass(HINSTANCE);
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 DWORD checkAsmCode(char*, t_thread*, DWORD);
 void PaintByteMemory(DWORD, char);
-void PrintMemoryBlock(DWORD, int, char);
-LRESULT CALLBACK ToolbarProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+//void PrintMemoryBlock(DWORD, int, char);
+void MyChildProcess(HWND);
+void pushStr(char*);
+//void PaintEip(DWORD);
 
 HINSTANCE	hinst;			// DLL instance
 HWND		hwmain;			// Handle of main OllyDbg window
@@ -45,13 +37,14 @@ HWND		hwplugin;		// Plugin window
 
 
 std::map<DWORD, int> layer_map;
-std::vector<std::vector<DWORD>> vector_w;
-std::vector<std::vector<DWORD>> vector_r;
+std::vector<std::vector<DWORD>> vector_w;	//書き込み領域
+std::vector<std::vector<DWORD>> vector_r;	//読み込み領域
+//std::vector<std::vector<DWORD>> vector_x;	//実行領域
 
 int margin_x = 0;
 int margin_y = 0;
-int height = 3;
-int width = 3;
+int height = 2;
+int width = 2;
 
 BOOL WINAPI DllEntryPoint(HINSTANCE hi, DWORD reason, LPVOID reserved) {
 	if (reason == DLL_PROCESS_ATTACH)
@@ -135,7 +128,7 @@ ulong Disassemble(ulong addr, ulong threadid, char *command, char *comment) {
 	strcpy(comment, da.comment);
 	return length;
 }
-
+/*
 int findIndex(DWORD value, std::vector<DWORD> v)
 {
 	auto iter = std::find(v.begin(), v.end(), value);
@@ -147,6 +140,7 @@ int findIndex(DWORD value, std::vector<DWORD> v)
 	}
 	return index;
 }
+*/
 
 //
 // OllyDbgのメインループを通るたびに呼び出されるコールバック関数
@@ -177,10 +171,11 @@ extc void _export cdecl ODBG_Pluginmainloop(DEBUG_EVENT *debugevent) {
 		//Exeption Debug Eventならログウィンドウに逆アセンブル結果とコメントを出力
 		if (code == 1){
 			Disassemble(eip, threadid, command, comment);
-			//			Addtolist(eip, -1, "Command - %s", command);
+			//			Addtolist(eip, -1, "Command - %s", command);	//ログウィンドウに出力
 			//			Addtolist(eip, -1, "Comment - %s", comment);
 
-			checkAsmCode(command, pthread, eip);
+			checkAsmCode(command, pthread, eip);	//メモリアクセス命令の判別
+			pushStr(command);	//子プロセスへ渡す
 		}
 
 	}
@@ -236,17 +231,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	PAINTSTRUCT ps;
 	HDC hdc;
 
-	static int wx, wy;//画面の大きさ
-	static int y;//スクロール位置
-	static int dy;//増分
-	static int range;//最大スクロール範囲
-	static int yclient;//現在のクライアント領域の高さ
+	static  HBITMAP hDrawBmp = NULL;	//オフスクリーン描画用ビットマップ
+	static  HDC     hDrawDC = NULL;		//オフスクリーン描画用デバイスコンテキスト
+	RECT rec;
+
+	static int wx, wy;	//画面の大きさ
+	static int y;		//スクロール位置
+	static int dy;		//増分
+	static int range;	//最大スクロール範囲
+	static int yclient;	//現在のクライアント領域の高さ
 
 	int wmId, wmEvent;
-
-	int wmax, iString0, iString1, iString2;
-	TCHAR szBuf[128];
-	static UINT uToolStyle;
 
 	switch (message)
 	{
@@ -254,53 +249,24 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		wx = GetSystemMetrics(SM_CXSCREEN);
 		wy = GetSystemMetrics(SM_CYSCREEN);
 
-		InitCommonControls();
-		wmax = GetSystemMetrics(SM_CXSCREEN);
-		hInst = (HINSTANCE)GetWindowLong(hWnd, GWL_HINSTANCE);
-		hToolBar = CreateWindowEx(
-			0,                          // 拡張スタイルなし
-			TOOLBARCLASSNAME,           // クラスネーム
-			NULL,                       // ウィンドウタイトル
-			WS_CHILD | WS_VISIBLE,      // ウィンドウスタイル
-			0, 0,                       // ウィンドウ位置
-			wmax, 40,                   // ウィンドウ幅、高さ
-			hWnd,                       // 親ウィンドウ
-			(HMENU)IDW_TOOL,            // コントロール識別子
-			hInst,                      // インスタンスハンドル
-			NULL);
-		SendMessage(hToolBar, TB_BUTTONSTRUCTSIZE, (WPARAM)sizeof(TBBUTTON), 0);
+		//オフスクリーン描画用デバイスコンテキスト作成
+		hDrawDC = CreateCompatibleDC(NULL);       //MDC作成
+		//MDC用ビットマップ作成
+		GetClientRect(GetDesktopWindow(), &rec);  //デスクトップのサイズを取得
+		hdc = GetDC(hWnd);                        //ウインドウのDCを取得
+		hDrawBmp = CreateCompatibleBitmap(hdc, rec.right, rec.bottom);
+		ReleaseDC(hWnd, hdc);                     //ウインドウのDCを開放
+		//MDCにビットマップを割り付け
+		SelectObject(hDrawDC, hDrawBmp);
 
-		/* ツールバーボタンに文字列を貼り付け */
-		LoadString(hInst, IDC_BUTTON1, (LPTSTR)&szBuf, sizeof(szBuf) - 1);
-		iString0 = SendMessage(hToolBar, TB_ADDSTRING, 0, (LPARAM)szBuf);
-		LoadString(hInst, IDC_BUTTON2, (LPTSTR)&szBuf, sizeof(szBuf) - 1);
-		iString1 = SendMessage(hToolBar, TB_ADDSTRING, 0, (LPARAM)szBuf);
-		LoadString(hInst, IDC_BUTTON3, (LPTSTR)&szBuf, sizeof(szBuf) - 1);
-		iString2 = SendMessage(hToolBar, TB_ADDSTRING, 0, (LPARAM)szBuf);
-		tbButton[0].iString = iString0;
-		tbButton[1].iString = iString1;
-		tbButton[2].iString = iString2;
-
-		/* ツールバーにボタンを挿入 */
-		SendMessage(hToolBar, TB_ADDBUTTONS,
-			(WPARAM)(sizeof(tbButton) / sizeof(TBBUTTON)), (LPARAM)(LPTBBUTTON)&tbButton);
-		// ボタンの区切りを挿入
-		SendMessage(hToolBar, TB_INSERTBUTTON, 2, (LPARAM)&tbSPACE);
-
-		/* ツールバーサブクラス化 */
-		defProc = (WNDPROC)GetWindowLong(hToolBar, GWL_WNDPROC);
-		SetWindowLong(hToolBar, GWL_WNDPROC, (LONG)ToolbarProc);
-		SetWindowLong(hToolBar, GWL_USERDATA, (LONG)defProc);
-
-		/* フラットツールバー */
-		uToolStyle = (UINT)GetWindowLong(hToolBar, GWL_STYLE);
-		uToolStyle |= (TBSTYLE_FLAT);
-		SetWindowLong(hToolBar, GWL_STYLE, (LONG)uToolStyle);
-		SendMessage(hToolBar, TB_AUTOSIZE, 0, 0);
-		InvalidateRect(hToolBar, NULL, TRUE);
-
+		//子プロセス生成
+		MyChildProcess(hWnd);
 		break;
 	case WM_DESTROY:
+		if (hProcess)
+			CloseHandle(hProcess);
+		if (hWrite)
+			CloseHandle(hWrite);
 		hwplugin = NULL;
 		break;
 	case WM_SIZE:
@@ -309,8 +275,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		y = min(y, range);
 		SetScrollRange(hWnd, SB_VERT, 0, range, FALSE);
 		SetScrollPos(hWnd, SB_VERT, y, TRUE);
-
-		MoveWindow(hToolBar, 0, 0, LOWORD(lParam), HIWORD(lParam), TRUE);
 		break;
 	case WM_VSCROLL:
 		switch (LOWORD(wParam)) {
@@ -338,16 +302,19 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			y += dy;
 			ScrollWindow(hWnd, 0, -dy, NULL, NULL);
 			SetScrollPos(hWnd, SB_VERT, y, TRUE);
-			InvalidateRect(hWnd, NULL, FALSE);
+			UpdateWindow(hWnd);
 		}
 		break;
 	case WM_PAINT: {
 		hdc = BeginPaint(hWnd, &ps);	//描画開始
-
 		if (vector_w.empty() && vector_r.empty()) {
 			EndPaint(hWnd, &ps);	//描画終了
 			break;
 		}
+
+		//HBRUSH hDefBrush = (HBRUSH)SelectObject(hDrawDC, GetStockObject(WHITE_BRUSH));
+		GetClientRect(hWnd, &rec);  //ウインドウのサイズを取得
+		PatBlt(hDrawDC, 0, 0, rec.right, rec.bottom, PATCOPY);
 
 		BYTE data;	//アドレスの指す値
 		int x, y;
@@ -357,7 +324,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			for (DWORD d : v) {
 				Readmemory(&data, d, sizeof(data), 0);
 
-				d = d - 0x400000;
+				d = d - 0x400000;	//オフセット
 				x = d % 0x100;
 				y = d / 0x100;
 
@@ -365,15 +332,15 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 				y = y*margin_y + (y - 1)*height;
 
 				HPEN hNewPen = CreatePen(PS_SOLID, 1, RGB(0, data, 0));
-				HPEN hOldPen = (HPEN)SelectObject(hdc, hNewPen);
+				HPEN hOldPen = (HPEN)SelectObject(hDrawDC, hNewPen);
 				HBRUSH hNewBrush = CreateSolidBrush(RGB(0, data, 0));
-				HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, hNewBrush);
+				HBRUSH hOldBrush = (HBRUSH)SelectObject(hDrawDC, hNewBrush);
 
-				Rectangle(hdc, x, y, x + width, y + height);
+				Rectangle(hDrawDC, x, y, x + width, y + height);
 
-				SelectObject(hdc, hOldPen);
+				SelectObject(hDrawDC, hOldPen);
 				DeleteObject(hNewPen);
-				SelectObject(hdc, hOldBrush);
+				SelectObject(hDrawDC, hOldBrush);
 				DeleteObject(hNewBrush);
 			}
 		}
@@ -383,7 +350,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			for (DWORD d : v) {
 				Readmemory(&data, d, sizeof(data), 0);
 
-				d = d - 0x480000;
+				d = d - 0x480000;	//オフセット
 				x = d % 0x100;
 				y = d / 0x100;
 
@@ -391,24 +358,22 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 				y = y*margin_y + (y - 1)*height;
 
 				HPEN hNewPen = CreatePen(PS_SOLID, 1, RGB(data, data, 0));
-				HPEN hOldPen = (HPEN)SelectObject(hdc, hNewPen);
+				HPEN hOldPen = (HPEN)SelectObject(hDrawDC, hNewPen);
 				HBRUSH hNewBrush = CreateSolidBrush(RGB(data, data, 0));
-				HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, hNewBrush);
+				HBRUSH hOldBrush = (HBRUSH)SelectObject(hDrawDC, hNewBrush);
 
-				Rectangle(hdc, x, y, x + width, y + height);
+				Rectangle(hDrawDC, x, y, x + width, y + height);
 
-				SelectObject(hdc, hOldPen);
+				SelectObject(hDrawDC, hOldPen);
 				DeleteObject(hNewPen);
-				SelectObject(hdc, hOldBrush);
+				SelectObject(hDrawDC, hOldBrush);
 				DeleteObject(hNewBrush);
 			}
 		}
-		
 
-		//char text[64];
-		//sprintf(text, "x=%02x y=%03x data=%02x", x, y, data);
-		//TextOut(hdc, 10, 10, text, lstrlen(text));
+		BitBlt( hdc, 0, 0, rec.right, rec.bottom, hDrawDC, 0, 0, SRCCOPY );	//丸コピー
 		EndPaint(hWnd, &ps);	//描画終了
+
 		break; }
 	case WM_COMMAND:
 		wmId = LOWORD(wParam);
@@ -429,10 +394,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	return 0;
 }
 
+//メモリアクセス命令の判別と階層分け
 DWORD checkAsmCode(char* asmCode, t_thread* pthread, DWORD eip){
 
 	//pthread->reg.r[7];	//EDIへのアクセス例
-	//DWORD eip = pthread->reg.ip;	←これが何故か落ちる
 
 	std::string code(asmCode);
 	std::smatch match;
@@ -447,6 +412,8 @@ DWORD checkAsmCode(char* asmCode, t_thread* pthread, DWORD eip){
 	std::string reg_s;
 	int reg_num;
 	DWORD reg;
+
+	//PaintEip(eip);
 
 	if (std::regex_match(code, match, regex_w)){
 		size_s = match[1].str();
@@ -569,6 +536,32 @@ DWORD checkAsmCode(char* asmCode, t_thread* pthread, DWORD eip){
 	return NULL;
 }
 
+/*
+void PaintEip(DWORD eip) {
+
+	HDC hdc = GetDC(hwplugin);
+
+	HPEN hPen = CreatePen(PS_SOLID, 1, RGB(255, 0, 0));
+	HBRUSH hBrush = CreateSolidBrush(RGB(255, 0, 0));
+	SelectObject(hdc, hPen);   // 作成したペンを使用するように設定
+	SelectObject(hdc, hBrush); // 取得したブラシを使用するように設定
+
+	eip = eip - 0x4D3000;
+	int x = eip % 0x100;
+	int y = eip / 0x100;
+
+	x = x*margin_x + (x - 1)*width + 20;
+	y = y*margin_y + (y - 1)*height;
+
+	Rectangle(hdc, x, y, x + width, y + height);
+
+	ReleaseDC(hwplugin, hdc);
+	DeleteObject(hPen);
+	DeleteObject(hBrush);
+}
+*/
+
+//1バイト分のメモリアクセス描画
 void PaintByteMemory(DWORD mem, char mode) {
 
 	BYTE data;
@@ -584,17 +577,17 @@ void PaintByteMemory(DWORD mem, char mode) {
 		hOldPen = (HPEN)SelectObject(hdc, hNewPen);
 		hNewBrush = CreateSolidBrush(RGB(0, data, 0));
 		hOldBrush = (HBRUSH)SelectObject(hdc, hNewBrush);
-		mem = mem - 0x400000;
+		//mem = mem - 0x400000;
 	}
 	else if (mode == 'r') {
 		hNewPen = CreatePen(PS_SOLID, 1, RGB(data, data, 0));
 		hOldPen = (HPEN)SelectObject(hdc, hNewPen);
 		hNewBrush = CreateSolidBrush(RGB(data, data, 0));
 		hOldBrush = (HBRUSH)SelectObject(hdc, hNewBrush);
-		mem = mem - 0x480000;
+		//mem = mem - 0x480000;
 	}
 
-	//mem = mem - 0x400000;
+	mem = mem - 0x400000;		//オフセット
 	int x = mem % 0x100;
 	int y = mem / 0x100;
 
@@ -615,6 +608,7 @@ void PaintByteMemory(DWORD mem, char mode) {
 	ReleaseDC(hwplugin, hdc);
 }
 
+/*
 void PrintMemoryBlock(DWORD mem, int size, char mode) {
 
 	BYTE* data;
@@ -667,19 +661,73 @@ void PrintMemoryBlock(DWORD mem, int size, char mode) {
 	ReleaseDC(hwplugin, hdc);
 	free(data);
 }
+*/
 
-/* ツールバーサブクラス */
-LRESULT CALLBACK ToolbarProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+//子プロセス作成
+void MyChildProcess(HWND hWnd)
 {
-	switch (msg)
-	{
-	case WM_RBUTTONDOWN:
-	case WM_RBUTTONUP:
-		if (SendMessage(hWnd, TB_GETHOTITEM, 0, 0) >= 0)
-		{
-			ReleaseCapture();
-		}
-		return 0;
+	HANDLE hRead;
+	SECURITY_ATTRIBUTES sa;
+	STARTUPINFO si;
+	PROCESS_INFORMATION pi;
+
+	sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+	sa.lpSecurityDescriptor = NULL;
+	sa.bInheritHandle = TRUE;
+
+	if (!CreatePipe(&hRead, &hWrite, &sa, 0)) {
+		MessageBox(hWnd, "パイプの作成に失敗しました", "Error", MB_OK);
+		return;
 	}
-	return CallWindowProc(defProc, hWnd, msg, wParam, lParam);
+	if (!DuplicateHandle(GetCurrentProcess(), //ソースプロセス
+		hWrite, //duplicateするハンドル(オリジナルハンドル)
+		GetCurrentProcess(), //ターゲットプロセス(行先)
+		NULL, //複製ハンドルへのポインタ(コピーハンドル)
+		0, //アクセス権
+		FALSE, //子供がハンドルを継承するかどうか
+		DUPLICATE_SAME_ACCESS)) { //オプション
+		MessageBox(hWnd, "DuplicateHandle Error", "Error", MB_OK);
+		CloseHandle(hWrite);
+		CloseHandle(hRead);
+		hWrite = NULL;
+		return;
+	}
+
+	memset(&si, 0, sizeof(STARTUPINFO));
+	si.cb = sizeof(STARTUPINFO);
+	si.dwFlags = STARTF_USESTDHANDLES;
+	si.hStdInput = hRead;
+	si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+	si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+
+	if (!CreateProcess(NULL, "child.exe", NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+		MessageBox(hWnd, "CreateProcess Error", "Error", MB_OK);
+		CloseHandle(hWrite);
+		hWrite = NULL;
+		return;
+	}
+
+	hProcess = pi.hProcess;
+	CloseHandle(pi.hThread);
+	CloseHandle(hRead);
+
+	return;
+}
+
+//子プロセスに文字列を渡す
+void pushStr(char* szBuf) {
+	DWORD dwResult, dwError;
+	if (!WriteFile(hWrite, szBuf, 256, &dwResult, NULL)) {
+		dwError = GetLastError();
+		if (dwError == ERROR_BROKEN_PIPE || dwError == ERROR_NO_DATA) {
+			MessageBox(hwplugin, "パイプがありません", "Error", MB_OK);
+		}
+		else {
+			MessageBox(hwplugin, "何らかのエラーです", "Error", MB_OK);
+		}
+		CloseHandle(hWrite);
+		hWrite = NULL;
+		CloseHandle(hProcess);
+		hProcess = NULL;
+	}
 }
