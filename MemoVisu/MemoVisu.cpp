@@ -35,7 +35,6 @@ HINSTANCE	hinst;			// DLL instance
 HWND		hwmain;			// Handle of main OllyDbg window
 HWND		hwplugin;		// Plugin window
 
-
 std::map<DWORD, int> layer_map;
 std::vector<std::vector<DWORD>> vector_w;	//書き込み領域
 std::vector<std::vector<DWORD>> vector_r;	//読み込み領域
@@ -128,20 +127,6 @@ ulong Disassemble(ulong addr, ulong threadid, char *command, char *comment) {
 	strcpy(comment, da.comment);
 	return length;
 }
-/*
-int findIndex(DWORD value, std::vector<DWORD> v)
-{
-auto iter = std::find(v.begin(), v.end(), value);
-size_t index = std::distance(v.begin(), iter);
-
-if (index == v.size())
-{
-return -1;
-}
-return index;
-}
-*/
-
 //
 // OllyDbgのメインループを通るたびに呼び出されるコールバック関数
 //
